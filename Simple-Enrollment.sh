@@ -108,6 +108,7 @@ ENROLL_COMPLETE_TEXT="Enrollment is now complete. Click on Logout to finish."
 
 SOFTWARE_ARRAY=(
   # "Installing Rosetta2,enroll_rosetta"
+  "Installing Homebrew,enroll_homebrew"
   "Installing Office 365,enroll_office365"
   "Installing Firefox,enroll_firefox"
   "Installing NoMAD,enroll_nomad"
@@ -118,7 +119,8 @@ SOFTWARE_COUNT=${#SOFTWARE_ARRAY[@]}
 
 CUSTOMIZATION_ARRAY=(
   "Enabling FileVault,enroll_filevault"
-  "Setting Computer Name, enroll_set-computername "
+  "Setting Computer Name,enroll_set-computername"
+  "Moving computer,move_site"
 )
 CUSTOMIZATION_COUNT=${#CUSTOMIZATION_ARRAY[@]}
 
