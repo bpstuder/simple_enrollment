@@ -24,4 +24,3 @@ Just create a policy with following parameters :
 Also change the categoryName variable line 19. It must reflect the category where all your policies are stored.
 
 The script will run all the policies in order. I suggest you name your policies with a starting number, like "1.0-Policy1"
-
