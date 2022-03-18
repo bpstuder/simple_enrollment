@@ -1,142 +1,157 @@
-#!/bin/sh
+#!/bin/zsh
 ###
-# File: S-Simple-Enrollment.sh
-# File Created: 2021-01-09 18:46:00
-# Usage : Simple enrollment, based on DEPNotify launcher script.
-# Author: Benoit-Pierre Studer
+# File: Simple-Enrollment-v2.sh
+# File Created: 2022-03-14 12:19:37
+# Usage :
+# Author: Benoit-Pierre STUDER
 # -----
 # HISTORY:
-# 2021-02-04	Benoit-Pierre Studer	Added all the steps of previous DEPNotify based enrolment
+# 2022-03-18	Benoit-Pierre STUDER	Authentication is now with Bearer Token. Made the policies dynamic based on Category
 ###
 
-CURRENT_USER=$(stat -f%Su /dev/console)
-CURRENT_USERID=$(/usr/bin/id -u ${CURRENT_USER})
+jamfProUser="$4"
+jamfProPassEnc="$5"
+jamfProSalt="$6"
+jamfProPassPhrase="$7"
+testingMode="$8"  #true of false
+welcomePopup="$9" #true of false
 
-ENROLL_LOG="/var/log/enroll.log"
+jamfCategory="_Enrollment-Policies"
 
-NOTIFICATION_APP="/Library/Application Support/JAMF/bin/Management Action.app/Contents/MacOS/Management Action"
-JAMF_HELPER="/Library/Application Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper"
+jamfProPass=$(echo "$jamfProPassEnc" | /usr/bin/openssl enc -aes256 -d -a -A -S "$jamfProSalt" -k "$jamfProPassPhrase")
+
+jamfProURL=$(/usr/bin/defaults read /Library/Preferences/com.jamfsoftware.jamf jss_url)
+jamfProURL=${jamfProURL%%/}
+
+echo "Connecting to $jamfProURL"
+# created base64-encoded credentials
+encodedCredentials=$(printf "${jamfProUser}:${jamfProPass}" | /usr/bin/iconv -t ISO-8859-1 | /usr/bin/base64 -i -)
+# generate an auth token
+authToken=$(/usr/bin/curl "$jamfProURL/api/auth/tokens" \
+  --silent \
+  --request POST \
+  --header "Authorization: Basic $encodedCredentials" \
+  --header "Content-Length: 0" \
+  -w "\n%{http_code}")
+
+httpCode=$(tail -n1 <<<"${authToken}")
+httpBody=$(sed '$ d' <<<"${authToken}")
+
+echo "Command HTTP result : ${httpCode}"
+# echo "Response : ${httpBody}"
+
+if [[ ${httpCode} == 200 ]]; then
+  echo "Token creation done"
+else
+  echo "[ERROR] Unable to create token. Curl code received : ${httpCode}"
+  exit 1
+fi
+
+# parse authToken for token, omit expiration
+token=$(awk -F \" '{ print $4 }' <<<"$authToken" | xargs)
+#######
+
+logFile="/var/log/enroll.log"
+
+currentUser=$(stat -f%Su /dev/console)
+currentUserID=$(/usr/bin/id -u ${CURRENT_USER})
+currentSystemVersion=$(sw_vers -productVersion)
+hostSerialNumber=$(system_profiler SPHardwareDataType | grep "Serial Number" | awk -F ": " '{print $2}')
+jamfHelperExe="/Library/Application Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper"
+notificationApp="/Library/Application Support/JAMF/bin/Management Action.app/Contents/MacOS/Management Action"
+
+# VARIABLES
+############
 
 # TESTING MODE
-if [[ -z "${4}" ]]; then
-  TESTING_MODE=true
-else
-  TESTING_MODE="${4}"
+if [[ -z $testingMode ]]; then
+  testingMode=true
 fi
-echo "Testing mode : ${TESTING_MODE}" | tee -a ${ENROLL_LOG}
+echo "Testing mode : ${testingMode}" | tee -a ${logFile}
 
 # WELCOME SETTINGS
-if [[ -z "${5}" ]]; then
-  WELCOME_POPUP=true
-else
-  WELCOME_POPUP="${5}"
+if [[ -z $welcomePopup ]]; then
+  welcomePopup=true
 fi
-echo "Welcome popup enabled : ${WELCOME_POPUP}" | tee -a ${ENROLL_LOG}
-WELCOME_TITLE="Welcome aboard"
-WELCOME_TEXT="Thanks for choosing a Mac ! We want you to have a few applications and settings configured before you get started with your new Mac. 
+echo "Welcome popup enabled : ${welcomePopup}" | tee -a ${logFile}
+welcomeTitle="Welcome aboard"
+welcomeText="Thanks for choosing a Mac ! We want you to have a few applications and settings configured before you get started with your new Mac. 
 This process should take 10 to 20 minutes to complete. 
 If you need additional software or help, please visit the Store app in your Applications folder or on your Dock."
 
+# ENROLLMENT COMPLETE SETTINGS
+enrollCompleteTitle="Enrollment complete"
+enrollCompleteText="Enrollment is now complete. Click on Logout to finish."
+
+# MAIN SCRIPT
+##############
+
+# Collecting Policies to run
+
+categoryPoliciesResult=$(/usr/bin/curl "${jamfProURL}/JSSResource/policies/category/${jamfCategory}" \
+  --silent \
+  --insecure \
+  --request GET \
+  --header "Authorization: Bearer $token" \
+  --header "Accept: application/xml" \
+  -w "\n%{http_code}")
+
+httpCode=$(tail -n1 <<<"${categoryPoliciesResult}")
+httpBody=$(sed '$ d' <<<"${categoryPoliciesResult}")
+
+# echo "Response : ${httpBody}"
+
+if [[ ${httpCode} == 200 ]]; then
+  echo "Policies for category $jamfCategory retrieved" | tee -a ${logFile}
+else
+  echo "[ERROR] Unable to collect policies for category $jamfCategory. Curl code received : ${httpCode}" | tee -a ${logFile}
+  exit 1
+fi
+
+policiesCount=$(echo $httpBody | xmllint --xpath '//policies/size/text()' -)
+echo "Found $policiesCount policies to proceed" | tee -a ${logFile}
+declare -A policiesToRun
+
+for ((i = 1; i <= $policiesCount; i++)); do
+  policyID="$(echo $httpBody | xmllint --xpath '//policies/policy['"$i"']/id/text()' -)"
+  policyName="$(echo $httpBody | xmllint --xpath '//policies/policy['"$i"']/name/text()' -)"
+  # policiesToRun[$policyID]=$policyName
+  policiesToRun[$policyName]=$policyID
+done
+
 # Wait for user Finder
-echo "Waiting for user session to open" | tee -a ${ENROLL_LOG}
+echo "Waiting for user session to open" | tee -a ${logFile}
 while [[ -z $(pgrep -x "Finder") ]]; do
   sleep 1
 done
-echo "Session ready" | tee -a ${ENROLL_LOG}
+echo "Session ready" | tee -a ${logFile}
 
-echo "Current user is : ${CURRENT_USER}"
+echo "Current user is : ${currentUser}"
 try=0
-until [[ ${CURRENT_USER} != "_mbsetupuser" ]] || [[ "$try" -gt "20" ]]; do
+until [[ ${currentUser} != "_mbsetupuser" ]] || [[ "$try" -gt "20" ]]; do
   ((try++))
-  echo "Waiting 5s for user session to open. (Try : $try/20)" | tee -a ${ENROLL_LOG}
+  echo "Waiting 5s for user session to open. (Try : $try/20)" | tee -a ${logFile}
   sleep 5
-  CURRENT_USER=$(stat -f%Su /dev/console)
-  echo "Current user is : ${CURRENT_USER}" | tee -a ${ENROLL_LOG}
+  currentUser=$(stat -f%Su /dev/console)
+  echo "Current user is : ${currentUser}" | tee -a ${logFile}
   if [[ $try == 20 ]]; then
-    echo "[ERROR] Session user is still _mbpsetupuser. Exiting..." | tee -a ${ENROLL_LOG}
+    echo "[ERROR] Session user is still _mbpsetupuser. Exiting..." | tee -a ${logFile}
     exit 1
   fi
 done
 
-echo "Sleep 10s to finish session opening" | tee -a ${ENROLL_LOG}
+echo "Sleep 10s to finish session opening" | tee -a ${logFile}
 sleep 10
 
-# Self Service Settings
-# SELF_SERVICE_APP_NAME="Self Service.app"
-# SELF_SERVICE_NAME="$(echo "$SELF_SERVICE_APP_NAME" | cut -d "." -f1)"
-# echo "Opening ${SELF_SERVICE_APP_NAME} for assets download." | tee -a ${ENROLL_LOG}
-# open -a "/Applications/${SELF_SERVICE_APP_NAME}" --hide
+echo "Starting post enrollment tasks" | tee -a ${logFile}
 
-# try=0
-# SELF_SERVICE_PID=$(pgrep -l "Self Service" | cut -d " " -f1)
-# until [[ ! -z "$SELF_SERVICE_PID" ]] || [[ "$try" -gt "20" ]]; do
-#   ((try++))
-#   echo "Waiting for ${SELF_SERVICE_NAME}. (Try : $try/20)" | tee -a ${ENROLL_LOG}
-#   sleep 10
-
-#   SELF_SERVICE_PID=$(pgrep -l "Self Service" | cut -d " " -f1)
-#   echo "PID : $SELF_SERVICE_PID" | tee -a ${ENROLL_LOG}
-#   if [[ $try == 20 ]]; then
-#     echo "[ERROR] Unable to open ${SELF_SERVICE_NAME}" | tee -a ${ENROLL_LOG}
-#     exit 1
-#   fi
-# done
-
-# # Loop waiting on the branding image to properly show in the users library
-# try=0
-# CUSTOM_BRANDING_PNG="/Users/$CURRENT_USER/Library/Application Support/com.jamfsoftware.selfservice.mac/Documents/Images/brandingimage.png"
-# until [[ -f "$CUSTOM_BRANDING_PNG" ]] || [[ "$try" -gt "20" ]]; do
-#   ((try++))
-#   echo "Waiting for branding image from Jamf Pro. (Try : $try/20)" | tee -a ${ENROLL_LOG}
-#   sleep 10
-#   if [[ $try == 20 ]]; then
-#     echo "[ERROR] Unable to get the Self Service Branding image." | tee -a ${ENROLL_LOG}
-#     exit 1
-#   fi
-# done
-
-# # Closing Self Service
-# SELF_SERVICE_PID=$(pgrep -l ${SELF_SERVICE_NAME} | cut -d " " -f1)
-# echo "Killing Self Service PID $SELF_SERVICE_PID." | tee -a ${ENROLL_LOG}
-# kill "$SELF_SERVICE_PID"
-
-# ENROLLMENT COMPLETE SETTINGS
-ENROLL_COMPLETE_TITLE="Enrollment complete"
-ENROLL_COMPLETE_TEXT="Enrollment is now complete. Click on Logout to finish."
-
-# SOFTWARE POLICIES
-
-SOFTWARE_ARRAY=(
-  # "Installing Rosetta2,enroll_rosetta"
-  "Installing Homebrew,enroll_homebrew"
-  "Installing Office 365,enroll_office365"
-  "Installing Firefox,enroll_firefox"
-  "Installing NoMAD,enroll_nomad"
-)
-SOFTWARE_COUNT=${#SOFTWARE_ARRAY[@]}
-
-# CUSTOMIZATION POLICIES
-
-CUSTOMIZATION_ARRAY=(
-  "Enabling FileVault,enroll_filevault"
-  "Setting Computer Name,enroll_set-computername"
-  "Moving computer,move_site"
-)
-CUSTOMIZATION_COUNT=${#CUSTOMIZATION_ARRAY[@]}
-
-###############################################################################
-# MAIN SCRIPT
-###############################################################################
-
-echo "Starting post enrollment tasks" | tee -a ${ENROLL_LOG}
-
-if [[ "$WELCOME_POPUP" == true ]]; then
-  echo "Displaying Welcome popup" | tee -a ${ENROLL_LOG}
-  "/Library/Application Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper" \
+if [[ "$welcomePopup" == true ]]; then
+  echo "Displaying Welcome popup" | tee -a ${logFile}
+  "${jamfHelperExe}" \
     -windowType hud \
     -windowPosition lr \
-    -title "${WELCOME_TITLE}" \
-    -description "${WELCOME_TEXT}" \
+    -title "${welcomeTitle}" \
+    -description "${welcomeText}" \
     -alignDescription natural \
     -icon /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarCustomizeIcon.icns \
     -button1 OK \
@@ -144,68 +159,45 @@ if [[ "$WELCOME_POPUP" == true ]]; then
     -lockHUD &
 fi
 
-echo "Sleeping 10s before starting enrollment" | tee -a ${ENROLL_LOG}
-sleep 10
-
-echo "${SOFTWARE_COUNT} softwares to install" | tee -a ${ENROLL_LOG}
-launchctl asuser "$CURRENT_USERID" "$NOTIFICATION_APP" \
+echo "${policiesCount} policies to run" | tee -a ${logFile}
+launchctl asuser "$currentUserID" "$notificationApp" \
   -message "Installing softwares" \
   -title "Enrollment in progress..."
 
-for POLICY in "${SOFTWARE_ARRAY[@]}"; do
-  POLICY_TEXT=$(echo "$POLICY" | cut -d ',' -f1)
-  POLICY_NAME=$(echo "$POLICY" | cut -d ',' -f2)
-
-  echo "Processing: ${POLICY_TEXT}" | tee -a ${ENROLL_LOG}
-  if [ "$TESTING_MODE" = true ]; then
+for policy in "${(kn)policiesToRun[@]}"; do
+  echo "Processing Policy ${policiesToRun[$policy]} : ${policy}" | tee -a ${logFile}
+  if [ "$testingMode" = true ]; then
     sleep 10
-  elif [ "$TESTING_MODE" = false ]; then
-    /usr/local/bin/jamf policy -event "${POLICY_NAME}"
+  elif [ "$testingMode" = false ]; then
+    /usr/local/bin/jamf policy -id "${policiesToRun[$policy]}"
   fi
 done
 
-echo "${CUSTOMIZATION_COUNT} customization policies to install" | tee -a ${ENROLL_LOG}
-launchctl asuser "$CURRENT_USERID" "$NOTIFICATION_APP" \
-  -message "Customizing your experience" \
-  -title "Enrollment in progress..."
-
-for POLICY in "${CUSTOMIZATION_ARRAY[@]}"; do
-  POLICY_TEXT=$(echo "$POLICY" | cut -d ',' -f1)
-  POLICY_NAME=$(echo "$POLICY" | cut -d ',' -f2)
-
-  echo "Processing: ${POLICY_TEXT}" | tee -a ${ENROLL_LOG}
-  if [ "$TESTING_MODE" = true ]; then
-    sleep 10
-  elif [ "$TESTING_MODE" = false ]; then
-    /usr/local/bin/jamf policy -event "${POLICY_NAME}"
-  fi
-done
-
-launchctl asuser "$CURRENT_USERID" "$NOTIFICATION_APP" \
+launchctl asuser "$cuurentUserID" "$notificationApp" \
   -message "All tasks completed successfully" \
   -title "Enrollment complete"
 
-echo "Checking FileVault status" | tee -a ${ENROLL_LOG}
-FV_DEFERRED=$(/usr/bin/fdesetup status | grep "Deferred" | cut -d ' ' -f6)
-echo "Filevault deferred status is : ${FV_DEFERRED}" | tee -a ${ENROLL_LOG}
+echo "Checking FileVault status" | tee -a ${logFile}
+fileVaultDeferred=$(/usr/bin/fdesetup status | grep "Deferred" | cut -d ' ' -f6)
+echo "Filevault deferred status is : ${fileVaultDeferred}" | tee -a ${logFile}
 
-echo "Enrollment complete" | tee -a ${ENROLL_LOG}
-if [ "$TESTING_MODE" = true ]; then
+echo "Enrollment complete" | tee -a ${logFile}
+if [ "$testingMode" = true ]; then
   sleep 10
-elif [ "$TESTING_MODE" = false ]; then
-  if [[ "${FV_DEFERRED}" == "active" ]]; then
-    "${JAMF_HELPER}" \
+elif [ "$testingMode" = false ]; then
+  if [[ "${fileVaultDeferred}" == "active" ]]; then
+    "${jamfHelperExe}" \
       -windowType utility \
-      -title "${ENROLL_COMPLETE_TITLE}" \
-      -description "${ENROLL_COMPLETE_TEXT}" \
+      -title "${enrollCompleteTitle}" \
+      -description "${enrollCompleteText}" \
       -icon "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AlertNoteIcon.icns" \
       -button1 "Logout"
     pkill loginwindow
   else
-    "${JAMF_HELPER}" \
+    "${jamfHelperExe}" \
       -windowType utility \
-      -title "${ENROLL_COMPLETE_TITLE}" \
-      -description "${ENROLL_COMPLETE_TEXT}" \
+      -title "${enrollCompleteTitle}" \
+      -description "${enrollCompleteText}" \
       -icon "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AlertNoteIcon.icns" \
       -button1 "Let's start"
   fi
