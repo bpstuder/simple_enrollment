@@ -6,6 +6,7 @@
 # Author: Benoit-Pierre STUDER
 # -----
 # HISTORY:
+# 2022-04-26	Benoit-Pierre STUDER	Added Fullscreen management
 # 2022-03-18	Benoit-Pierre STUDER	Authentication is now with Bearer Token. Made the policies dynamic based on Category
 ###
 
