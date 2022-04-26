@@ -15,6 +15,7 @@ jamfProSalt="$6"
 jamfProPassPhrase="$7"
 testingMode="$8"  #true of false
 welcomePopup="$9" #true of false
+fullScreen="$10" #true of false
 
 jamfCategory="_Enrollment-Policies"
 
@@ -78,6 +79,15 @@ welcomeTitle="Welcome aboard"
 welcomeText="Thanks for choosing a Mac ! We want you to have a few applications and settings configured before you get started with your new Mac. 
 This process should take 10 to 20 minutes to complete. 
 If you need additional software or help, please visit the Store app in your Applications folder or on your Dock."
+
+# FULLSCREEN SETTINGS
+if [[ -z fullScreen ]]; then
+  fullScreen=true
+fi
+echo "Fullscreen enabled : ${fullScreen}" | tee -a ${ENROLL_LOG}
+fullScreenTitle="Welcome aboard"
+fullScreenHeading="Enrollment in progress"
+fullScreenText="We are preparing your computer and it should take around 20 minutes. It's time for a coffee break !"
 
 # ENROLLMENT COMPLETE SETTINGS
 enrollCompleteTitle="Enrollment complete"
@@ -159,6 +169,19 @@ if [[ "$welcomePopup" == true ]]; then
     -lockHUD &
 fi
 
+if [[ "$fullScreen" == true ]]; then
+  echo "Displaying Fullscreen message" | tee -a ${ENROLL_LOG}
+  "/Library/Application Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper" \
+    -windowType fs \
+    -title "${fullScreenTitle}" \
+    -heading "${fullScreenTitleHeading}" \
+    -alignHeading center \
+    -description "${fullScreenTitleText}" \
+    -alignDescription center \
+    -icon /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarCustomizeIcon.icns \
+    -lockHUD &
+fi
+
 echo "${policiesCount} policies to run" | tee -a ${logFile}
 launchctl asuser "$currentUserID" "$notificationApp" \
   -message "Installing softwares" \
@@ -185,6 +208,7 @@ echo "Enrollment complete" | tee -a ${logFile}
 if [ "$testingMode" = true ]; then
   sleep 10
 elif [ "$testingMode" = false ]; then
+  pkill jamfHelper
   if [[ "${fileVaultDeferred}" == "active" ]]; then
     "${jamfHelperExe}" \
       -windowType utility \
