@@ -228,4 +228,21 @@ elif [ "$testingMode" = false ]; then
   fi
 fi
 
+# expire the auth token
+echo "Expiring Token"
+result=$(/usr/bin/curl "$jamfProURL/api/auth/invalidateToken" \
+    --silent \
+    --request POST \
+    --header "Authorization: Bearer $token" \
+    --header "Content-Length: 0" \
+    -w "\n%{http_code}")
+httpCode=$(tail -n1 <<<"${result}")
+
+if [[ ${httpCode} == 204 ]]; then
+    echo "Command HTTP result : ${httpCode}"
+    echo ">> Done"
+else
+    echo "[ERROR] Unable to expire token. Curl code received : ${httpCode}"
+fi
+
 exit 0
