@@ -20,7 +20,7 @@ fullScreen="$10" #true of false
 
 jamfCategory="_Enrollment-Policies"
 
-jamfProPass=$(echo "$jamfProPassEnc" | /usr/bin/openssl enc -aes256 -d -a -A -S "$jamfProSalt" -k "$jamfProPassPhrase")
+jamfProPass=$(echo "$jamfProPassEnc" | /usr/bin/openssl enc -aes256 -md md5 -d -a -A -S "$jamfProSalt" -k "$jamfProPassPhrase")
 
 jamfProURL=$(/usr/bin/defaults read /Library/Preferences/com.jamfsoftware.jamf jss_url)
 jamfProURL=${jamfProURL%%/}
