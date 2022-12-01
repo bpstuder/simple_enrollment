@@ -6,6 +6,7 @@
 # Author: Benoit-Pierre STUDER
 # -----
 # HISTORY:
+# 2022-10-04	Benoit-Pierre STUDER	Updated fullscreen message. Modified openSSL decryption to work on macOS 13.
 # 2022-04-26	Benoit-Pierre STUDER	Added Fullscreen management
 # 2022-03-18	Benoit-Pierre STUDER	Authentication is now with Bearer Token. Made the policies dynamic based on Category
 ###
@@ -130,6 +131,13 @@ for ((i = 1; i <= $policiesCount; i++)); do
   policiesToRun[$policyName]=$policyID
 done
 
+for policy in "${(kn)policiesToRun[@]}"; do
+
+  echo "Policy ${policiesToRun[$policy]} : ${policy}"
+done
+
+exit 0
+
 # Wait for user Finder
 echo "Waiting for user session to open" | tee -a ${logFile}
 while [[ -z $(pgrep -x "Finder") ]]; do
@@ -172,15 +180,12 @@ fi
 
 if [[ "$fullScreen" == true ]]; then
   echo "Displaying Fullscreen message" | tee -a ${ENROLL_LOG}
-  "/Library/Application Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper" \
+  /Library/Application\ Support/JAMF/bin/jamfHelper.app/Contents/MacOS/jamfHelper \
+    -icon "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarCustomizeIcon.icns" \
+    -description ${fullScreenText} \
     -windowType fs \
-    -title "${fullScreenTitle}" \
-    -heading "${fullScreenTitleHeading}" \
-    -alignHeading center \
-    -description "${fullScreenTitleText}" \
-    -alignDescription center \
-    -icon /System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/ToolbarCustomizeIcon.icns \
-    -lockHUD &
+    -heading ${fullScreenHeading} \
+    &
 fi
 
 echo "${policiesCount} policies to run" | tee -a ${logFile}
