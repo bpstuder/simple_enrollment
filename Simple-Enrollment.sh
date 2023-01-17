@@ -6,6 +6,7 @@
 # Author: Benoit-Pierre STUDER
 # -----
 # HISTORY:
+# 2023-01-16	Benoit-Pierre STUDER	Added power check + Caffeinate
 # 2022-10-04	Benoit-Pierre STUDER	Updated fullscreen message. Modified openSSL decryption to work on macOS 13.
 # 2022-04-26	Benoit-Pierre STUDER	Added Fullscreen management
 # 2022-03-18	Benoit-Pierre STUDER	Authentication is now with Bearer Token. Made the policies dynamic based on Category
@@ -20,6 +21,9 @@ welcomePopup="$9" #true of false
 fullScreen="$10" #true of false
 
 jamfCategory="_Enrollment-Policies"
+
+# Duration in second to plug AC adapter
+powerCheckWait=30 
 
 jamfProPass=$(echo "$jamfProPassEnc" | /usr/bin/openssl enc -aes256 -md md5 -d -a -A -S "$jamfProSalt" -k "$jamfProPassPhrase")
 
@@ -131,12 +135,10 @@ for ((i = 1; i <= $policiesCount; i++)); do
   policiesToRun[$policyName]=$policyID
 done
 
-for policy in "${(kn)policiesToRun[@]}"; do
+# for policy in "${(kn)policiesToRun[@]}"; do
 
-  echo "Policy ${policiesToRun[$policy]} : ${policy}"
-done
-
-exit 0
+#   echo "Policy ${policiesToRun[$policy]} : ${policy}"
+# done
 
 # Wait for user Finder
 echo "Waiting for user session to open" | tee -a ${logFile}
@@ -161,6 +163,46 @@ done
 
 echo "Sleep 10s to finish session opening" | tee -a ${logFile}
 sleep 10
+
+echo "Checking user has plugged his computer to AC"
+
+if [[ ! $(pmset -g ps | head -1) =~ "AC Power" ]]; then
+  echo "No AC power detected" | tee -a ${logFile}
+  echo "Waiting for AC power..." | tee -a ${logFile}
+  "${jamfHelperExe}" \
+      -windowType utility \
+      -title "Warning" \
+      -description "Please ensure your laptop is connected to AC power to avoid unexpected shutdown during enrollment." \
+      -icon "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AlertNoteIcon.icns" \
+      -heading "AC Power not detected" &
+  jamfHelperPowerPID=$!
+  while [[ "$powerCheckWait" -gt "0" && ! $(pmset -g ps | head -1) =~ "AC Power" ]]; do
+    sleep 1
+    ((powerCheckWait--))
+    echo "Time left : ${powerCheckWait}s"
+  done
+  if [[ $powerCheckWait == "0" ]]; then
+    kill "$jamfHelperPowerPID"
+    "${jamfHelperExe}" \
+        -windowType utility \
+        -title "Error" \
+        -description "No AC Power detected. Please plug it in and relaunch Enrollment." \
+        -icon "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/AlertStopIcon.icns" \
+        -heading "AC Power not detected" \
+        -button1 OK \
+        -defaultButton 0 &
+    echo "[ERROR] No AC Power Detected" | tee -a ${logFile}
+    exit 1
+  fi
+  if [[ $(pmset -g ps | head -1) =~ "AC Power" ]] ; then
+    echo "AC Power Detected. Continuing" | tee -a ${logFile}
+    kill "$jamfHelperPowerPID"
+  fi
+fi
+
+echo "Caffeinating the mac"
+caffeinate -dis &
+caffeinatePID=$!
 
 echo "Starting post enrollment tasks" | tee -a ${logFile}
 
@@ -202,7 +244,7 @@ for policy in "${(kn)policiesToRun[@]}"; do
   fi
 done
 
-launchctl asuser "$cuurentUserID" "$notificationApp" \
+launchctl asuser "$currentUserID" "$notificationApp" \
   -message "All tasks completed successfully" \
   -title "Enrollment complete"
 
@@ -213,8 +255,10 @@ echo "Filevault deferred status is : ${fileVaultDeferred}" | tee -a ${logFile}
 echo "Enrollment complete" | tee -a ${logFile}
 if [ "$testingMode" = true ]; then
   sleep 10
+  pkill $caffeinatePID
 elif [ "$testingMode" = false ]; then
   pkill jamfHelper
+  pkill $caffeinatePID
   if [[ "${fileVaultDeferred}" == "active" ]]; then
     "${jamfHelperExe}" \
       -windowType utility \
