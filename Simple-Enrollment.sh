@@ -102,6 +102,12 @@ enrollCompleteText="Enrollment is now complete. Click on Logout to finish."
 # MAIN SCRIPT
 ##############
 
+# Check if enrollment has already been done
+if [[ -f /private/var/db/.EnrollmentDone ]]; then
+  echo "Enrollment already done. Exiting..." | tee -a ${logFile}
+  exit 0
+fi
+
 # Collecting Policies to run
 
 categoryPoliciesResult=$(/usr/bin/curl "${jamfProURL}/JSSResource/policies/category/${jamfCategory}" \
@@ -276,6 +282,9 @@ elif [ "$testingMode" = false ]; then
       -button1 "Let's start"
   fi
 fi
+
+# Create file to prevent re-enrollment
+touch /private/var/db/.EnrollmentDone
 
 # expire the auth token
 echo "Expiring Token"
